@@ -1,0 +1,60 @@
+/* Fond blanc pour le thème */
+body {
+  background-color: #fff; /* Fond blanc */
+}
+
+/* Couleur principale du texte */
+p, li, a {
+  color: #333;
+}
+
+/* Styling personnalisé pour les en-têtes */
+h1, h2, h3, h4, h5, h6 {
+  color: #9e3a36; /* Couleur de texte rouge foncé */
+  background-color: transparent; /* Fond transparent pour les en-têtes */
+  font-family: "Arial", sans-serif;
+  font-size: 24px;
+  margin: 20px 0 10px;
+  padding: 10px;
+  text-align: left;
+}
+
+/* Couleur rouge pour les liens */
+a {
+  color: rgb(169, 32, 21); /* Couleur de lien rouge */
+}
+
+/* Style du lien au survol */
+a:hover {
+  text-decoration: underline;
+}
+
+/* Largeur du contenu principal */
+.container {
+  max-width: 800px;
+}
+
+/* Fond rouge pour les en-têtes de tableau */
+th {
+  background-color: #f7cac9; /* Fond rouge clair pour les en-têtes de tableau */
+  color: #9e3a36; /* Texte rouge foncé pour les en-têtes de tableau */
+}
+
+/* Fond rouge pour les cellules de tableau au survol */
+tr:hover {
+  background-color: #f7cac9; /* Fond rouge clair pour les cellules de tableau au survol */
+}
+
+/* Style personnalisé du bouton */
+.bouton-personnalise {
+  background-color: rgb(169, 32, 21); /* Fond rouge du bouton */
+  color: #fff; /* Couleur du texte du bouton */
+  padding: 10px 20px; /* Rembourrage du bouton */
+  border: none; /* Supprimer la bordure */
+  cursor: pointer; /* Changement du curseur au survol */
+  border-radius: 5px; /* Coins arrondis */
+}
+
+.bouton-personnalise:hover {
+  background-color: #800026; /* Légèrement plus foncé au survol */
+}

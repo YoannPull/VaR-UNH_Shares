@@ -1,0 +1,1274 @@
+---
+title: "Projet 2 : VaR et backtesting, Action UNH"
+author:
+  - name: "Yoann PULL"
+  - name: "Master 2 IREF"
+date: "17 Novembre 2023"
+format:
+  html:
+    toc: true
+    toc-float: true
+    toc-depth: 10
+    toc-expand: 1
+    toc-location: left
+    theme: simplex
+    css: style-pro.css  
+    df-print: paged
+    highlight: github 
+    embed-resources: true
+    code-fold: true
+    code-summary: "Cliquer pour afficher le code"
+    code-tools: true
+    grid: 
+      margin-width: 100px
+reference-location: margin 
+citation-location: margin
+editor: visual
+---
+
+![](logo_iref.png){fig-align="left" width="180" height="103"}
+
+# 1) Introduction
+
+## 1.1) Présentation succinte de l'entreprise :
+
+Le ticker "UNH" correspond à UnitedHealth Group Incorporated, une entreprise américaine de premier plan dans le secteur de la santé et de la gestion des soins de santé. Fondée en 1977 et ayant son siège social à Minnetonka, Minnesota, UnitedHealth Group opère à l'échelle nationale et internationale, proposant une vaste gamme de produits et de services liés à la santé.
+
+L'entreprise se distingue par plusieurs activités et filiales clés, notamment UnitedHealthcare, l'un des plus grands fournisseurs d'assurance maladie aux États-Unis, offrant des plans d'assurance pour divers publics, des particuliers aux entreprises et aux programmes publics. Optum, une filiale d'UnitedHealth Group, se concentre sur la gestion des soins de santé, la prestation de services de santé intégrés, la gestion de la pharmacie, les soins de santé virtuels, et les solutions technologiques pour les professionnels de la santé.
+
+OptumRx, une division d'Optum, gère les avantages pharmaceutiques, assurant un accès abordable aux médicaments essentiels. En outre, UnitedHealth Group International étend son influence à l'échelle mondiale en fournissant des produits et services de soins de santé dans plusieurs pays, en travaillant en collaboration avec des gouvernements, des entreprises et des prestataires de soins de santé pour améliorer l'accès aux soins et la qualité des services.
+
+L'engagement fondamental d'UnitedHealth Group est d'améliorer la santé et le bien-être de ses membres et de ses clients, tout en restant à la pointe de l'innovation dans le domaine des soins de santé. L'entreprise joue un rôle de premier plan dans le secteur de la santé aux États-Unis et a une influence significative sur la prestation des soins de santé dans le monde entier.
+
+## 1.2) Objectif:
+
+*La Value-at-Risk est définie comme la perte maximale potentielle qui ne devrait être atteinte qu'avec une probabilité donnée sur un horizon temporel donné (Manganelli et Engle, 2001).*
+
+L'objectif de ce projet est d'estimer la Value at Risk de l'action UnitedHealth Group Incorporated puis par backtesting, nous verifierons que cette estimation est correcte. On considère le cours de l'action observé en clôture sur la période du 04/01/2010 au 03/10/2023. Nous réaliserons une estimation entre le 04 janvier 2010 et le 03 janvier 2018. Et nous réaliserons le backtesting du 04 janvier 2018 au 03 novembre 2023.
+
+Une liste de définition concernant les tests statisques et les modèles utilisés sont donnée dans [l'annexe](#annexe).
+
+Dans le projet précédent nous avions obtenue ces caractéristiques pour la série $r_{te}$ et $r_{tt}$.
+
+| Caractéristiques                            | $r_{te}$ | $r_{tt}$ |
+|---------------------------------------------|----------|----------|
+| Asymétrie perte/gain                        | Non      | Non      |
+| Queues de distribution épaisses             | Oui      | Oui      |
+| Autocorrélations des carrées des rendements | Oui      | Oui      |
+| Clusters de volatilité                      | Oui      | Oui      |
+| Queues épaisses conditionnelles             | Oui      | Oui      |
+| Effets de levier                            | Oui      | Oui      |
+| Saisonnalité                                | Oui      | Oui      |
+| Stationnarité                               | Oui      | Oui      |
+
+*Tableau récapitulatif de* $r_{te}$ et $r_{tt}$
+
+\newpage
+
+```{r,echo = F, warning=F, include = F}
+rm(list = ls())
+gc()
+```
+
+```{r, message= F, echo = F, include = F}
+#library
+library(yfR)
+library(FinTS)
+library(fGarch)
+library(moments)
+library(TSA)
+library(lmtest)
+library(forecast)
+library(tseries) #garch function
+library(foreach)
+library(doParallel)
+library(doSNOW)
+library(ghyp)
+library(data.table)
+library(ggplot2)
+
+
+#packages utilisée pour le calcul de la VaR avec fenêtre glissante :
+
+library(xts)
+library(forecast) 
+library(moments)
+library(yfR)
+library(scales)
+library(rugarch) 
+library(PerformanceAnalytics)
+library(parallel) # pour déterminer le nombre de coeurs
+library(zoo)
+```
+
+```{r, include = F, echo = F}
+# themes ggplot et fonctions graphique :
+col_theme <- "#A92015"
+colors_theme <- c(col_theme,"black","blue3","green3","pink3")
+
+
+graph_count <-  0
+graph_name <- function(title){
+  graph_count <<- graph_count + 1  #global variable
+  return(paste("Graphe", graph_count, ':' , title, collapse = ' '))
+}
+
+table_count <-  0
+table_name <- function(title){
+  table_count <<- table_count + 1  #global variable
+  return(paste("Table", table_count, ':' , title, collapse = ' '))
+}
+
+# fonction pour créer des liens dans le texte
+md_link <- function(text, link) {
+  sprintf("[%s](%s)", text, link)
+}
+```
+
+```{r,message=F, include = F, echo = F}
+#Chargement du ticket de l'entreprise UNH :
+my_ticker <-  "UNH"
+first_date <- "2010-01-04"
+last_date <-"2023-11-03"
+df_yf <- yf_get(tickers = my_ticker, 
+                     first_date = first_date,
+                     last_date = last_date,
+			freq_data='daily',type_return='log')
+
+```
+
+```{r, include = F, echo = F}
+#Création des différentes séries :
+pt<-df_yf$price_adjusted
+dpt=diff(pt)
+datesp<-df_yf$ref_date
+dates<-datesp[-1]
+rt=df_yf$ret_adjusted_prices[-1]
+rt<-xts(x=rt,order.by=dates)
+N<-length(rt)
+end_date <- which(df_yf$ref_date == "2018-01-03")
+rte<-rt[1:end_date] # ensemble d'estimation
+NE <-length(rte)
+rtt<-rt[(end_date + 1):N] # ensemble de test
+NT <- length(rtt)
+```
+
+## 1.3) Première analyse de nos données:
+
+```{r, echo = FALSE}
+plot(datesp, pt, type = "n", ylab = "UNH") 
+
+
+lines(datesp, pt, type = "l", col = col_theme) 
+title(main = graph_name("Evolution du cours UNH"))
+
+
+crise_covid19_date <- as.Date("2019-12-01") 
+
+abline(v = crise_covid19_date, col = colors_theme[2], lty = 2)  
+
+legend("topleft", legend = c("Crise COVID-19"),
+       col = colors_theme[2], lty = 2)
+```
+
+La tendance est croissante, passant d'un prix de 25.68513 à la première unité de temps à un prix de 501.14 à la dernière unité de temps. Nous n'observons pas de saisonnalité, et il ne semble pas non plus y avoir d'hétéroscédasticité.
+
+On constate des variations de prix beaucoup plus importantes à partir de 2019, sans doute liées aux différentes crises survenues (Covid, Ukraine,...).
+
+```{r, echo = FALSE}
+
+plot(dates, dpt, type = "n", ylab = "UNH")
+
+
+lines(dates, dpt, type = "l", col = col_theme) 
+
+title(main = graph_name(("Variations des prix UNH")))
+
+
+crise_covid19_date <- as.Date("2019-12-01") 
+
+
+abline(v = crise_covid19_date, col = colors_theme[4], lty = 2) 
+
+
+legend("topleft", legend = c("Crise COVID-19"),
+       col = colors_theme[4], lty = 2)
+```
+
+Ici, il n'y a pas de tendance, on observe des fluctuations autour de 0, et celles-ci ne varient pas dans le temps. La variation des prix de notre action n'est pas hétéroscédastique ; on observe des "paquets de volatilité" à partir de 2019/2020 jusqu'à aujourd'hui.
+
+```{r, echo = FALSE}
+
+plot(dates, rt, type = "n", ylab = "UNH")
+
+
+lines(dates, rt, type = "l", col = col_theme)  
+
+title(main = graph_name(" Rendements logarithmiques de UNH"))
+
+
+crise_covid19_date <- as.Date("2019-12-01") 
+
+
+abline(v = crise_covid19_date, col = colors_theme[4], lty = 2)   
+
+
+
+legend("topleft", legend = c("Crise COVID-19"),
+       col = colors_theme[4], lty = 2)
+```
+
+Comme précédemment mentionné, nous constatons que les rendements logarithmiques ne présentent pas de tendance et oscillent autour de 0. La volatilité semble relativement stable dans le temps (donc homoscédastique), bien que cette stabilité puisse être remise en question en raison d'une année 2021 exceptionnelle où les rendements ont affiché des fluctuations très significatives.
+
+Vérifions les moyennes de la variation des prix et des rendements logarithmiques de l'action UNH :
+
+```{r, echo = FALSE}
+cat("Moyenne empirique : \n")
+cat("Moyenne des rendements logarithmiques =", mean(rt), "\n")
+cat("Moyenne des variations de prix =", mean(dpt))
+```
+
+**Nous allons maintenant travailler sur la série RTE :**
+
+```{r, echo = FALSE}
+
+plot(dates[1:end_date], rte, type = "n", ylab = "UNH",
+     xlab = "dates") 
+
+
+lines(dates[1:end_date], rte, type = "l", col = col_theme) 
+title(main = graph_name(" Rendements estimés de UNH"))
+```
+
+La moyenne empirique de UNH est égale à `r round(mean(rte),5)`
+
+De manière similaire au chronogramme précédent des rendements logarithmiques complets, nous pouvons constater que pour $rte$, il n'y a aucune tendance évidente, et les données varient autour de 0. Il est de plus en plus apparent qu'il y ait une homoscédasticité dans ces données.
+
+Pour confirmer si la moyenne empirique, qui est très proche de 0, est statistiquement nulle, nous allons procéder à un **test de Student :**
+
+$$ H_0 : E(rte_t) = \mu = 0$$ versus
+
+$$H_a : E(rte_t) = \mu \ne 0$$
+
+```{r, echo = F, warning = F}
+t.test(rte)
+```
+
+Nous obtenons une p-valeur de 0.001053, ce qui est inférieur à 0.05. Par conséquent, nous rejetons l'hypothèse nulle ($H_0$). En conclusion, la moyenne empirique n'est pas statistiquement nulle, ce qui suggère que l'espérance du PGD qui a généré $rte_t$ n'est pas nulle.
+
+Par la suite, nous allons poursuivre notre analyse sur la série des rendements logarithmiques de RTE. Une analyse détaillée sur $rtt$ sera également réalisée en annexe.
+
+## 1.4) Asymétrie perte/gain, queues de distribution épaisses: {#asymétrie-pertegain-queues-de-distribution-épaisses}
+
+```{r, echo = FALSE}
+
+
+
+hist(rte,
+     main= graph_name("Histogramme des Rendements Logarithmiques"),
+     xlab= "Rendements Logarithmiques",
+     ylab= "Fréquence",
+     col= c(col_theme),        
+     border=colors_theme[2],      
+     xlim=c(-0.05, 0.07), 
+     breaks=200,          
+     las=1)                
+
+
+curve(dnorm(x, mean = mean(rte), sd = sd(rte)), 
+      add = TRUE, col = colors_theme[2], lwd = 2)
+```
+
+Une première observation est que nos données semblent être symétriques et leptokurtiques. Vérifions-les à l'aide des tests d'Agostino et d'Anscombe.
+
+**Test d'Agostino :**
+
+Un test de l'hypothèse de symétrie consiste à vérifier la nullité de la skewness, qui est égale au moment centré d'ordre 3 normalisé de la distribution. Soit $\mu_3$, le moment centré d'ordre 3 d'une variable aléatoire : $\mu_3 = E[(X - \mu)^3]$. Nous souhaitons tester si la skewness est nulle.
+
+Les hypothèses pour ce test sont les suivantes :
+
+-   $H_0$ : La skewness de la distribution est nulle, c'est-à-dire } $\mu_3 = 0$.
+
+-   $H_a$ : La skewness de la distribution n'est pas nulle, c'est-à-dire } $\mu_3 \neq 0$
+
+```{r, echo = FALSE}
+agostino.test(rte)
+```
+
+On a une p-value = 0.2721 \> 0.05 donc $H_0$ est accepté, la skewness de la distribution est nulle. Notre distribution est donc symétrique
+
+**Test d'Anscombe Modifié par Agostino et Zar (Ticket UNH) :**
+
+Le test d'Anscombe modifié par Agostino et Zar est utilisé pour vérifier si les rendements suivent une distribution leptokurtique. Les hypothèses pour ce test sont les suivantes :
+
+-   $H_0$ : Les rendements suivent une loi normale centrée réduite (distribution normale)
+-   $H_a$ : Les rendements ne suivent pas une loi normale centrée réduite (distribution non normale leptokurtique).
+
+Le test d'Anscombe modifié par Agostino et Zar repose sur la statistique qui suit, sous $H_0$, une loi normale centrée réduite. Une valeur de kurtosis significativement différente de 3 est utilisée pour déterminer si la distribution est leptokurtique.
+
+```{r, echo = FALSE}
+anscombe.test(rte)
+```
+
+Ici, nous avons une valeur de kurtosis (kurt) égale à 6.034, qui est supérieure à 3, et donc significative. Notre distribution est effectivement leptokurtique.
+
+Nos observations préliminaires sont donc confirmées. En fin de compte, nous avons une distribution à la fois symétrique et leptokurtique, ce qui indique une concentration autour de la moyenne et une probabilité accrue d'événements extrêmes (queues épaisses).
+
+# 2) Estimations des Value at Risk:
+
+## 2.1) VaR Normale, VaR de Cornish Fisher et VaR Historique:
+
+Dans cette section, nous allons calculer différentes VaR, à savoir la VaR Normale, la VaR modifiée de Cornish Fisher, et la VaR historique.
+
+Le code ci-dessous calcule la VaR normale, historique, et modifiée de Cornish Fisher en utilisant l'estimation de la fenêtre glissante (rolling estimate) pour obtenir des prévisions hors échantillon.
+
+Cette méthode implique d'estimer un modèle avec les T premières observations, puis de faire une prévision pour la date T + 1 et de calculer la VaR. Ensuite, on ré-estime les modèles des dates 2 à T + 1, puis on réalise une prévision pour la date T + 2 et ainsi de suite.
+
+Dans notre cas, nous estimons notre modèle initial sur $rte$. Nous réalisons une prévision pour NE + 1 et ré-estimons à nouveau sur la période de 2 à NE + 1. Ainsi, nous allons calculer la VaR à 99% quotidienne entre NE + 1 et NT de cette manière.
+
+```{r, echo = FALSE}
+#alpha = 0.99
+alpha = 0.95
+# alpha = 0.975
+```
+
+```{r, echo = FALSE}
+
+## cette fonction permet de réaliser le back testing de notre VaR 
+## ici dans le cas des Var Histo, modifiée (CF) et Normale
+## cette fonction calcul donc pour un x donné et un alpha donné la Var(x).
+backTestVaR <- function(x, p = alpha) {
+  normal.VaR = as.numeric(VaR(x, p=p, method="gaussian"))
+  historical.VaR = as.numeric(VaR(x, p=p, method="historical"))
+  modified.VaR = as.numeric(VaR(x, p=p, method="modified"))
+  ans = c(normal.VaR, historical.VaR, modified.VaR)
+  names(ans) = c("Normal", "HS", "Modified")
+  return(ans)
+}
+
+# rolling 1-step ahead estimates of VaR
+## ici on réalise un rolling estimate de fenêtre NE, en se déplaçant vers la droite de 1.
+## la fonction que l'on applique sur les fênetres est la fonction backTestVaR
+VaR.results = rollapply(as.zoo(rt), width=NE, 
+                        FUN = backTestVaR, p=alpha, by.column = FALSE, 
+                        align = "right")
+
+# Plot un graphique
+#chart.TimeSeries(merge(rt, VaR.results),legend.loc="topright")
+
+
+
+violations.mat = matrix(0, 3, 5)
+rownames(violations.mat) = c("Normal", "HS", "Modified")
+colnames(violations.mat) = c("En1", "n1", "1-alpha", "Percent", "VR")
+violations.mat[, "En1"] = (1-alpha)*NT
+violations.mat[, "1-alpha"] = 1 - alpha
+
+# Show Normal VaR violations
+normalVaR.violations = as.numeric(as.zoo(rt[index(VaR.results)])) < VaR.results[, "Normal"]
+violation.dates = index(normalVaR.violations[which(normalVaR.violations)])
+
+# Création de la matrice des violations
+for(i in colnames(VaR.results)) {
+  VaR.violations = as.numeric(as.zoo(rt[index(VaR.results)])) < VaR.results[, i]
+  violations.mat[i, "n1"] = sum(VaR.violations)
+  violations.mat[i, "Percent"] = sum(VaR.violations)/NT
+  violations.mat[i, "VR"] = violations.mat[i, "n1"]/violations.mat[i, "En1"]
+}
+
+resultats<-data.frame(matrix(NA,ncol=4,nrow=3))
+colnames(resultats)<-c("expected.exceed","actual.exceed","Kupiecpv","Christoffersenpv")
+rownames(resultats)<-c("Normale","HS","CF")
+
+# normale
+VaR.test1 = VaRTest(1-alpha,actual=coredata(rt[index(VaR.results)]), VaR=coredata(VaR.results[,"Normal"]))
+resultats[1,1]=VaR.test1$expected.exceed
+resultats[1,2]=VaR.test1$actual.exceed
+resultats[1,3]=VaR.test1$uc.LRp
+resultats[1,4]=VaR.test1$cc.LRp
+
+# historique
+VaR.test2 = VaRTest(1-alpha,actual=coredata(rt[index(VaR.results)]), VaR=coredata(VaR.results[,"HS"]))
+resultats[2,1]=VaR.test2$expected.exceed
+resultats[2,2]=VaR.test2$actual.exceed
+resultats[2,3]=VaR.test2$uc.LRp
+resultats[2,4]=VaR.test2$cc.LRp
+
+
+
+# modifie
+VaR.test3 = VaRTest(1-alpha, actual=coredata(rt[index(VaR.results)]), VaR=coredata(VaR.results[,"Modified"]))
+
+resultats[3,1]=VaR.test3$expected.exceed
+resultats[3,2]=VaR.test3$actual.exceed
+resultats[3,3]=VaR.test3$uc.LRp
+resultats[3,4]=VaR.test3$cc.LRp
+
+#as.data.table(violations.mat)
+#as.data.table(resultats)
+```
+
+```{r,warning = FALSE, echo = FALSE}
+plot_data_frame <- merge(rt, VaR.results)
+plot_data_frame <- setDT(data.frame('index' = index(plot_data_frame), coredata(plot_data_frame)))
+
+melted_data <- melt(plot_data_frame, id.vars = "index")
+
+
+ggplot(melted_data, aes(x = index, y = value, color = variable)) +
+  geom_line(size = 0.3) +
+  labs(x = 'Time', y = 'Value', title = graph_name('Prédiction de la VaR  pour les lois Normal/Hs/Modified')) +
+  theme(legend.position = "right",panel.background = element_rect(fill = "white")) +
+  scale_color_manual(values = colors_theme[1:length(unique(melted_data$variable))],
+                     name = "")
+
+```
+
+|                    | **Violation Estimée** | **Violation théorique** | **PV Kupiec** | **PV Christoffersen** |
+|---------------|---------------|---------------|---------------|---------------|
+| VaR Normale        | 73                    | 84                      | 0.214205398   | 0.0151087915          |
+| VaR Cornish-Fisher | 73                    | 102                     | 0.001183107   | 0.0004918278          |
+| VaR Historique     | 73                    | 102                     | 0.001183107   | 0.0004918278          |
+
+: `r table_name('Violations des VaR Nomale, Cornish-Fisher et Historique')`
+
+Les définitions des test de Kupiec et de Christoffersen se trouvent [ici](#kupiec)
+
+-   Pour la **VaR Normale**, on constate un taux de violation de 5,7%, équivalent à une sous-évaluation de 70 points. Une p-value de 0,2, supérieure à 0,05, conduit à l'acceptation de l'hypothèse nulle pour le test de Kupiec, indiquant que la VaR est sous-évaluée. Cependant, la p-value inférieure à 0,05 dans le cadre du test de Christoffersen conduit au rejet de l'hypothèse, suggérant que la VaR n'est pas correctement estimée selon ce test.
+
+-   Pour la **VaR modifiée de Cornish-Fisher**, un taux de violation de 6,9% est observé, ce qui correspond à une sous-évaluation de 1,9%. Les p-values inférieures à 0,05 pour les tests de Kupiec et de Christoffersen indiquent que la VaR est mal estimée selon ces deux tests.
+
+-   Les résultats pour la **VaR Historique** sont identiques à ceux de la VaR CF.
+
+Dans la prochaine section, nous estimerons un modèle afin de calculer la **VaR Conditionnelle**.
+
+## 2.2) VaR Conditionnelle :
+
+<a id="VaRCondi"></a>
+
+Dans cette partie, nous allons estimer la VaR du modèle EGARCH(1,1) \~ std : La justification du choix des distributions et des modèles est donnée en annexe.
+
+-   [Choix des distributions](#distrib)
+
+-   [Annexe](#annexe)
+
+<a id="VaREGARCH"></a>
+
+-   Le modèle EGARCH est défini en [annexe ici](#EGARCH).
+-   Le modèle est estimé [ici](#EGARCH(1,1)).
+
+```{r, echo = FALSE}
+# Estmation par fenêtre glissante
+# modèle définit en annexe
+spec_egarch <- ugarchspec(variance.model=list(model="eGARCH", garchOrder=c(1,1)),
+            mean.model=list(armaOrder=c(1,1)),distribution.model="std")
+# Calcul le nombre de coeur
+no_cores <- detectCores() - 1
+# Initilisation du nombre de coeurs
+cl <- makeCluster(no_cores)
+# Seuil alpha
+alpha = 0.95
+
+roll=ugarchroll(spec_egarch, data=rt,n.ahead=1,forecast.length=length(rtt),
+                refit.every=1,refit.window="moving",solver = "hybrid",cluster=cl,fit.control = list(),calculate.VaR=TRUE,
+VaR.alpha=(1-alpha),keep.coef = TRUE)
+stopCluster(cl)
+```
+
+```{r, echo = FALSE}
+valueatrisk<-zoo(roll@forecast$VaR[,1])
+reelles<-zoo(roll@forecast$VaR[,2])
+index<-rownames(roll@forecast$VaR)
+
+# Premier graphique
+plot(dates[(NE+1):N],reelles,type='l',xlab="Dates \n EGARCH(1,1) ~ std",ylab="Rendements et VaR",
+    col = col_theme, lwd = 0.5, main = graph_name("VaR avec la méthode de fenêtre glissante"))
+lines(dates[(NE+1):N],valueatrisk,type='l',col=colors_theme[2],lwd = 1.5)
+legend("topright",inset=.05,c("rt","VaR"),col=c(col_theme,colors_theme[2]),lty=c(1,1))
+```
+
+```{r, echo = FALSE,message=F, include = F}
+report(roll,type="VaR",VaR.alpha=(1-alpha),conf.level=alpha)
+```
+
+|                        | Violation Estimée | Violation théorique | PV Kupiec | PV Christoffersen |
+|---------------|---------------|---------------|---------------|---------------|
+| VaR EGARCH(1,1) \~ std | 91                | 73.4                | 0.041     | 0.047             |
+
+: `r table_name('Violations VaR EGARCH(1,1)')`
+
+La VaR de notre modèle EGARCH présente un taux de violation de 6,2%. Nous avons donc sous-évalué la VaR de 1,2%. La p-value est inférieure à 0,05 dans le cadre du test de Kupiec. Ainsi, nous rejetons H0, indiquant que la VaR n'est pas bien estimée. De même, la p-value est inférieure à 0,05 dans le cadre du test de Christoffersen, conduisant également au rejet de H0. La VaR n'est donc une fois de plus pas bien estimée selon ce test.
+
+# 3) Conclusions:
+
+|                        | Violation Théorique | Violation Estimée | PV Kupiec   | PV Christoffersen |
+|---------------|---------------|---------------|---------------|---------------|
+| VaR Normale            | 73                  | 84                | 0.214205398 | 0.0151087915      |
+| VaR Cornish-Fisher     | 73                  | 102               | 0.001183107 | 0.0004918278      |
+| VaR Historique         | 73                  | 102               | 0.001183107 | 0.0004918278      |
+| VaR EGARCH(1,1) \~ std | 73.4                | 91                | 0.041       | 0.047             |
+
+: `r table_name('Récapitulatif des VaR')`
+
+Aucune des VaR valident les deux tests de Kupiec et de Christoffersen. Celle qui a se rapproche le plus de des violations théorique est le VaR Normale.
+
+Une piste de recherche aurait été de répartir $r_t$ en trois ensembles distincts : un ensemble d'entraînement, un ensemble de validation, et un ensemble de test. Cette approche aurait permis d'estimer plusieurs modèles sur l'ensemble de test, comme démontré ici, d'évaluer plusieurs valeurs à risque (VaR) sur l'ensemble de validation, comme présenté dans la section [E) D'autres VaR Conditionnelle :](#e-dautres-var-conditionnelle), et enfin de sélectionner le modèle qui aurait donné la meilleure estimation de la VaR sur l'ensemble de validation et le tester sur l'ensemble restant, l'ensemble de test.
+
+Bien que cette méthode soit couramment utilisée en apprentissage supervisé, il serait judicieux de se référer à des articles spécialisés, étant donné que les séries temporelles constituent un type de données particulier pour lequel cette méthodologie pourrait ne pas être parfaitement adaptée.
+
+<a id="annexe"></a>
+
+# Annexe: {#annexe}
+
+## A) Choix de la distribution:
+
+[Cliquez pour revenir à la partie VaR Conditionnelle](#VaRCondi)
+
+<a id="distrib"></a>
+
+Dans cette partie, nous allons estimer plusieurs lois de probabilités sur notre série de rendements. Ensuite, nous sélectionnerons celle qui se rapproche le plus de la série initiale. Comme nous avions montré dans la partie [1.4) Asymétrie perte/gain, queues de distribution épaisses :](#asymétrie-pertegain-queues-de-distribution-épaisses) que nous avions de l'asymétrie dans nos rendements, nous devons ajouter dans notre code d'estimation des différentes distributions l'argument suivant : `symmetric = T`.
+
+```{r}
+#estimation d'une distribution normale
+fitn<-fit.gaussuv(data=rte)
+summary(fitn)
+cat('----------------------------- \n')
+#estimation student asym ́etrique
+fitstu<-fit.tuv(rte,silent=T, symmetric = T)
+summary(fitstu)
+cat('----------------------------- \n')
+#gaussienne inverse asym ́etrique
+fitnig<-fit.NIGuv(data=rte,silent=T, symmetric = T) 
+summary(fitnig)
+cat('----------------------------- \n')
+#hyperbolique asym ́etrique
+fithyp<-fit.hypuv(rte,silent=T, symmetric = T) 
+summary(fithyp)
+cat('----------------------------- \n')
+#hyperbolique g ́en ́eralis ́ee asym ́etrique
+fitghypuv<-fit.ghypuv(rte,silent=T, symmetric = T)
+summary(fitghypuv)
+```
+
+`r table_name('Sortie R des différentes estimation')`
+
+```{r}
+plot(density(rte), 
+     main = graph_name("Estimateur par noyau de la densité des rendements \n et distributions estimées"),
+     xlab = "")
+lines(fitstu,col=2)#student
+lines(fitnig,col=3)#estimateur de la densit ́e de rte
+lines(fithyp,col=4)
+lines(fitghypuv,col = col_theme)
+legend("right",legend =c("rte","student","nig","hyp","ghyp"), col = c(1,2,3,4,col_theme),lty=rep(1,5))
+```
+
+On observe que la courbe qui est la plus proche de rte est la Student, puis la NIG, la GHYP, et enfin la HYP. On choisit donc la distribution "std".
+
+La spécification retenue dans la suite sera donc **"std"**.
+
+```{r}
+qqnorm(rte, col = col_theme,
+       main = graph_name("Epaisseur des queues de rte comparé \n à celle de la normale"))
+qqline(rte, col = colors_theme[2])
+```
+
+Sur ce graphique, on observe que les queues sont épaisses, avec une queue gauche plus épaisse. Nous utilisons donc la spécification "sstd", comme énoncé plus haut dans la suite. Dans l'estimation des modèles, si l'un des modèles présente de bonnes caractéristiques dans notre exercice, mais que celui-ci n'a pas la bonne distribution, nous essayerons dans l'ordre énoncé plus haut plusieurs distributions.
+
+## B) Estimations des modèles:
+
+Dans cette partie, nous allons estimer différents modèles sur la série de nos rendements. Quand cela n'est pas précisé, l'autocorrélation sera modélisée avec un ARMA(1,1) et la distribution que nous utiliserons sera la Student Asymétrique.
+
+Les définitions de chacun des modèles se retrouvent en annexe dans la partie [C) Définitions :](#c-définitions)
+
+### ARCH(1):
+
+```{r}
+jour=format(dates, format = "%A")
+mois=format(dates, format = "%B")
+moisrte=mois[1:NE]
+juillet=as.integer(moisrte=="July")
+jourrte=jour[1:NE]
+mardi=as.integer(jourrte=="Tuesday")
+spec_arch = ugarchspec(mean.model=list(external.regressors=as.matrix(cbind(mardi,juillet))),
+                      distribution.model = "std")
+fit_arch = ugarchfit(spec = spec_arch, data = rt,out.sample=length(rtt), solver = "hybrid")
+show(fit_arch)
+```
+
+```{r}
+spec_arch <- ugarchspec(variance.model = list(garchOrder = c(1,0)),
+                          mean.model = list(armaOrder = c(1,1)), distribution.model = "std")
+fit_arch <- ugarchfit(spec = spec_arch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_arch)
+```
+
+Les différentes statistiques employées ici se trouvent dans la partie de l'annexe : [D) Définitions Test statistiques :](#d-définitions-test-statistiques)
+
+On observe que tous les coefficients sont significatifs, indiquant la présence d'un effet ARCH. Plutôt que d'essayer des degrés plus élevés dans notre modèle ARCH, nous préférerons explorer des modèles tels que le GARCH(1,1).
+
+-   **Robust Standard Errors :** Tous les coefficients sont significatifs.
+
+-   **Weighted Ljung-Box Test on Standardized Residuals :** Il n'y a pas d'autocorrélation car toutes les p-values sont supérieures à 0,05 dans le test de Ljung-Box sur les résidus standardisés.
+
+-   **Weighted ARCH LM Tests :** Il y a la présence d'un effet ARCH. Nous préférerons plutôt essayer de modéliser nos rendements à l'aide d'un GARCH(1,1) plutôt que d'augmenter m.
+
+-   **Nyblom stability test :** La statistique jointe vaut 7.1762, ce qui est supérieur à 1.68, la valeur tabulée à 5%. Ainsi, nos variables ne sont pas stables dans le temps.
+
+-   **Sign Bias Test :** Toutes les p-values sont significatives, indiquant qu'il n'y a pas d'effet de signe ni d'effet de taille.
+
+-   **Adjusted Pearsong Goodness-Of-Fit Test :** Les p-values sont toutes inférieure à 0.05, on a donc la mauvaise distribution
+
+### GARCH(1,1):
+
+```{r}
+spec_garch <- ugarchspec(variance.model = list(garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),
+                         distribution.model = "std")
+fit_garch <- ugarchfit(spec = spec_garch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_garch)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_garch <- ugarchspec(variance.model = list(garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1)), distribution.model = "std")
+fit_garch <- ugarchfit(spec = spec_garch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_garch)
+```
+
+Le coefficient *alpha1* n'est pas significatif, on va donc le retirer.
+
+```{r}
+spec_garch <- ugarchspec(variance.model = list(garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1)), distribution.model = "std",
+                         fixed.pars = list(alpha1 = 0))
+fit_garch <- ugarchfit(spec = spec_garch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_garch)
+```
+
+Quand on le retire les effets ARCH ne sont pas modélisés et nous n'avons pas la bonne distribution selon l'Adjusted Pearson Goodness-of-Fit Test. On va donc changer de modèle.
+
+<a id="EGARCH(1,1)"></a>
+
+### EGARCH(1,1):
+
+[Cliquez pour revenir à la partie concernée](#VaREGARCH)
+
+```{r}
+spec_egarch <- ugarchspec(variance.model=list(model="eGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),distribution.model="std")
+fit_egarch <- ugarchfit(spec = spec_egarch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_egarch)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_egarch <- ugarchspec(variance.model=list(model="eGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="std")
+fit_egarch <- ugarchfit(spec = spec_egarch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_egarch)
+```
+
+-   **Robust Standard Errors :** Dans cette partie de notre sortie R, on y retrouve les coefficients estimés par le Maximum de Vraisemblance. Les écarts-types estimés sont ici robustes à l'hétéroscédasticité. Les statistiques $t$ associées à l'hypothèse nulle de nullité de chaque coefficient sont affichées dans la colonne *t value*, et enfin dans *Pr(\>\|t\|)*, on y retrouve les p-values correspondantes. On observe ici dans notre cas que les p-values associées à chacun de nos coefficients sont inférieures à 0,05. On rejette donc l'hypothèse nulle.
+
+-   **Weighted Ljung-Box Test on Standardized Residuals :** Dans cette sortie R, un test de Ljung-Box est réalisé sur les résidus standardisés. Les p-values sont toutes supérieures à 0,05. On rejette donc l'hypothèse nulle. Nous n'avons pas d'autocorrélation dans nos résidus.
+
+-   **Weighted ARCH LM Tests :** Ici, la statistique d'Engle est appliquée aux résidus standardisés et ce pour différents retards. Dans notre cas, on observe que les p-values sont supérieures à 0,05. On n'accepte donc pas l'hypothèse nulle d'absence de clusters de volatilité. Notre modèle a réussi à prendre en compte tous les clusters de volatilité présents dans nos données.
+
+-   **Nyblom stability Test :** On calcule la statistique de test de stabilité de Nyblom. La statistique jointe est de 1,8719, ce qui est inférieur à 2,11, la valeur tabulée à 5% pour la statistique de test jointe. On accepte donc l'hypothèse nulle de stabilité.
+
+-   **Sign bias Test :** On réalise ici un test du Sign Bias Test. Les p-values sont toutes supérieures à 0,05, il n'y a donc pas d'effet de signe ni d'effet de taille.
+
+-   **Adjusted Pearson Goodness-of-Fit Test :** Le test réalisé ici permet de tester l'adéquation entre la distribution que nous avons supposée, dans notre cas la distribution de Student Asymétrique, et la distribution empirique des résidus standardisés. Les p-values sont toutes supérieures à 0,05, on accepte l'hypothèse nulle d'adéquation de nos deux distributions.
+
+**Ce modèle est un très bon candidat pour l'estimation de la VaR de la série de nos rendements.**
+
+### GARCH-M(1,1):
+
+```{r}
+spec_garchm <-  ugarchspec(mean.model=list(armaOrder=c(1,1),archm=TRUE,external.regressors=as.matrix(cbind(mardi,juillet))),
+                           distribution.model="std")
+fit_garchm <- ugarchfit(spec = spec_garchm, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_garchm)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_garchm <-  ugarchspec(mean.model=list(armaOrder=c(1,1),archm=TRUE),distribution.model="std")
+fit_garchm <- ugarchfit(spec = spec_garchm, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_garchm)
+```
+
+-   **Robust Standard Errors :** Coefficients archm pas significatifs, alpha1 non plus.
+
+On va donc changer de modèle.
+
+<a id="IGARCH(1,1)"></a>
+
+### IGARCH(1,1):
+
+[Cliquez pour revenir à la partie concernée](#VaRIGARCH)
+
+#### Avec la distribution std:
+
+```{r}
+spec_igarch1 <- ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),
+           distribution.model="std")
+fit_igarch1 <- ugarchfit(spec = spec_igarch1, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_igarch1)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_igarch1 <- ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="std")
+fit_igarch1 <- ugarchfit(spec = spec_igarch1, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_igarch1)
+```
+
+-- **Robust Standard Errors :** Toutes les variables sont significatives, sauf *omega*, qu'on ne peut de toute manière pas retirer.
+
+-   **Weighted Ljung-Box Test on Standardized Residuals :** Il n'y a pas d'autocorrélation.
+
+-   **Weighted ARCH LM Tests :** Toutes les p-values sont supérieures à 0,05. On rejette donc l'hypothèse nulle. Il n'y a pas d'effet ARCH.
+
+-   **Nyblom stability Test :** La valeur jointe du test statistique vaut 66,87, ce qui est beaucoup plus grande que la valeur tabulée à 5% qui vaut 1,68.
+
+-   **Sign bias Test :** Toutes les p-values sont supérieures à 0,05, il n'y a donc pas d'effet de signe ni d'effet de taille.
+
+-   **Adjusted Pearson Goodness-of-Fit Test :** Il y a une seule valeur qui n'est pas significative. Donc *sstd* ne semble pas être la bonne distribution.
+
+**Candidat potentiel, même si le EGARCH(1,1) qui suit semble être bien meilleur.**
+
+#### Avec la distribution nig:
+
+```{r}
+spec_igarch2 <- ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),
+           distribution.model="nig",
+           fixed.pars = list(skew = 0))
+fit_igarch2 <- ugarchfit(spec = spec_igarch2, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_igarch2)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_igarch2 <- ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="nig",
+           fixed.pars = list(skew = 0))
+fit_igarch2 <- ugarchfit(spec = spec_igarch2, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_igarch2)
+```
+
+-   **Robust Standard Errors :** Toutes les variables sont significatives, sauf la *skewness* et *omega*. On va mettre la *skewness* à 0 et on laisse *omega* tel quel.
+
+-   **Weighted Ljung-Box Test on Standardized Residuals :** Il n'y a pas d'autocorrélation.
+
+-   **Weighted ARCH LM Tests :** Toutes les p-values sont supérieures à 0,05. On rejette donc l'hypothèse nulle. Il n'y a pas d'effet ARCH.
+
+-   **Nyblom stability Test :** La valeur jointe du test statistique vaut 51,951, ce qui est beaucoup plus grande que la valeur tabulée à 5% qui vaut 1,68.
+
+-   **Sign bias Test :** Toutes les p-values sont supérieures à 0,05, il n'y a donc pas d'effet de signe ni d'effet de taille.
+
+-   **Adjusted Pearson Goodness-of-Fit Test :** Toutes les p-values sont supérieures à 0,05. Donc *nig* semble être la bonne distribution ici.
+
+**Ce modèle est un bon candidat pour l'estimation de la VaR de nos rendements.**
+
+<a id="GJR-GARCH(1,1)"></a>
+
+### GJR-GARCH(0,1):
+
+[Cliquez pour revenir à la partie concernée](#VaRGJR-GARCH)
+
+```{r}
+spec_gjrgarch <- ugarchspec(variance.model=list(model="gjrGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),
+           distribution.model="std")
+fit_gjrgarch <- ugarchfit(spec = spec_gjrgarch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_gjrgarch)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_gjrgarch <- ugarchspec(variance.model=list(model="gjrGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="std")
+fit_gjrgarch <- ugarchfit(spec = spec_gjrgarch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_gjrgarch)
+```
+
+-   **Robust Standard Errors :** On a ici *omega* qui n'est pas significatif, mais on ne peut pas le retirer. De plus, *alpha1* n'est pas significatif. On va donc le retirer :
+
+```{r}
+spec_gjrgarch <- ugarchspec(variance.model=list(model="gjrGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="std",
+           fixed.pars = list(alpha1 = 0))
+fit_gjrgarch <- ugarchfit(spec = spec_gjrgarch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_gjrgarch)
+```
+
+En retirant *alpha1* on a :
+
+-   **Robust Standard Errors :** Tous les coefficients sont significatifs sauf omega
+
+-   **Weighted Ljung-Box Test on Standardized Residuals :** Toutes les p-values sont supérieurs à 0.05. Il n'y a pas d'autocorrélation dans notre série.
+
+-   **Weighted ARCH LM Tests :** Toutes les p-values sont supérieurs à 0.05. Il n'y a pas d'effets ARCH dans notre série.
+
+-   **Nyblom stability Test :** Nos variables ne sont pas stable dans le temps, la statistiques de test jointe est beaucoup plus élevé que la valeur tabulée à 5%. 64,4084 \> 1,9.
+
+-   **Sign bias Test :** Toutes les p-values sont supérieurs à 0.05. Il n'y pas d'effet de taille ni d'effet de signe.
+
+-   **Adjusted Pearson Goodness-of-Fit Test :** Toutes les p-values sont supérieurs à 0.05. On a la bonne distribution.
+
+*On a ici un candidat potentielle*
+
+### APARCH(1,1):
+
+Commençons par estimer un APARCH(1,1), ce qui correspond au processus suivant :
+
+-   ARCH(1) quand $\delta = 2, \gamma_1 = \beta_1 = 0$
+
+-   GARCH(1,1) quand $\delta = 2, \gamma_1 = 0$
+
+-   GJR-GARCH(1,1) quand $\delta = 2$
+
+Ce modèle est donc très interessant car d'autre modèles sont des cas particulier de celui ci.
+
+```{r}
+spec_aparch <- ugarchspec(variance.model = list(model = "apARCH", garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1),external.regressors=as.matrix(cbind(mardi,juillet))),
+                          distribution.model = "std")
+fit_aparch <- ugarchfit(spec = spec_aparch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_aparch)
+```
+
+On observe que mxreg1 mxreg2 sont des coefficients significatifs (p-val \> 0.05), on va donc les retirer.
+
+```{r}
+spec_aparch <- ugarchspec(variance.model = list(model = "apARCH", garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1)), distribution.model = "sstd")
+fit_aparch <- ugarchfit(spec = spec_aparch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_aparch)
+```
+
+On remarque de $\delta = 1.106$ qui est proche de 1. On va donc le fixer à 1.
+
+```{r}
+spec_aparch <- ugarchspec(variance.model = list(model = "apARCH", garchOrder = c(1,1)),
+                          mean.model = list(armaOrder = c(1,1)), distribution.model = "sstd",
+                          fixed.pars = list(delta = 1))
+fit_aparch <- ugarchfit(spec = spec_aparch, data = rt, out.sample = length(rtt), solver = "hybrid")
+show(fit_aparch)
+```
+
+-   **Dans Robust Standard Errors :** On observe que tous nos coefficients sont significatifs, à l'exception de *omega* qui ne l'est pas, avec une p-value de 0,11. Cependant, on ne peut pas le retirer, car cela reviendrait à poser sa nullité, alors qu'il doit être strictement positif selon le modèle GARCH(1,1). De plus, on observe que *alpha1* n'est pas significatif, avec une p-value de 0,06. Nous allons donc essayer un autre modèle.
+
+-   **Dans Ljung-Box Test :** On observe que toutes les p-values sont supérieures à 0,05. On accepte l'hypothèse nulle d'absence d'autocorrélation. Notre ARMA(1,1) a réussi à prendre en compte toute l'autocorrélation.
+
+-   **Dans Arch LM Tests :** Comme précédemment, toutes les p-values sont supérieures à 0,05. On accepte donc l'hypothèse nulle d'absence de clusters de volatilité. Le GARCH(1,1) a réussi à prendre en compte tous les clusters de volatilité.
+
+-   **Nyblom stability test :** La valeur calculée de la statistique jointe est de 2,605, ce qui est supérieur à la valeur tabulée de la statistique jointe à 5%, qui vaut 2,32. Nous rejetons donc l'hypothèse nulle de stabilité. On remarque que *omega*, *alpha1*, *beta1*, *gamma1*, *shape* ne sont pas stables dans le temps, car la valeur de leurs statistiques individuelles est supérieure à la valeur tabulée à 5%, qui est de 0,47.
+
+-   **Sign Bias Test :** Toutes les p-values sont supérieures à 0,05, donc il n'y a pas d'effet de signe ni d'effet taille.
+
+-   **Adjusted Pearson Goodness-of-Fit Test :** Toutes les p-values ne sont pas supérieures à 0,05. Donc "sstd" n'est pas la bonne distribution.
+
+Finalement, comme on a seulement *alpha1* qui n'est pas significatif et que les p-values du test de Pearson ne sont pas supérieures à 0,05.
+
+*Note : En faisant alpha1 = 0 notre algorithme ne converge pas. En changeant l'ordre du garch en notant `garchOrder = c(0,1)` les effets ARCH ne sont pas modélisés.*
+
+### Tableau Récapitulatif des modèles:
+
+On rappel que tous les modèles sont ici réalisées avec en plus un ARMA(1,1) et la distribution de Student Asymétrique.
+
+|                                           | ARCH(1)                                   | GARCH-M(1,1)                              | GARCH(1,1)                                | IGARCH(1,1) \~ std                        |
+|---------------|---------------|---------------|---------------|---------------|
+| **Robust Standard Errors**                | Tous les coefficients sont significatifs  | *archm* pas significatif                  | *alpha1* n'est pas significatif           | *omega* pas significatif                  |
+| **Ljung-Box Test**                        | Pas d'autocorrélation                     | Pas d'autocorrélation                     | Pas d'autocorrélation                     | Pas d'autocorrélation                     |
+| **ARCH LM Tests**                         | Effets ARCH                               | Pas d'effets ARCH                         | Effets ARCH                               | Pas d'effets ARCH                         |
+| **Nyblom stability Tests**                | Pas stables dans le temps                 | Pas stables dans le temps                 | Pas stables dans le temps                 | Pas stables dans le temps                 |
+| **Sign Bias Test**                        | Pas d'effet de signe ni d'effet de taille | Pas d'effet de signe ni d'effet de taille | Pas d'effet de signe ni d'effet de taille | Pas d'effet de signe ni d'effet de taille |
+| **Adjusted Pearson Goodness-of-Fit Test** | Pas la bonne distribution                 | Pas la bonne distribution                 | Pas la bonne distribution                 | Pas la bonne distribution                 |
+
+: Récapitulatif des modèles
+
+|                                           | IGARCH(1,1) \~ nig                        | EGARCH(1,1)                               | GJR_GARCH(0,1)                           | APARCH(1,1)                               |
+|---------------|---------------|---------------|---------------|---------------|
+| **Robust Standard Errors**                | *omega* pas significatif                  | Tous les coefficients sont significatifs  | *omega* n'est pas significatif           | $\delta =1$ ,*alpha1 pas significatif*    |
+| **Ljung-Box Test**                        | Pas d'autocorrélation                     | Pas d'autocorrélation                     | Pas d'autocorrélation                    | Pas d'autocorrélation                     |
+| **ARCH LM Tests**                         | Pas d'effets ARCH                         | Pas d'effets ARCH                         | Pas d'effets ARCH                        | Effets ARCH                               |
+| **Nyblom stability Tests**                | Pas stables dans le temps                 | Stables dans le temps                     | Pas stables dans le temps                | Pas stables dans le temps                 |
+| **Sign Bias Test**                        | Pas d'effet de signe ni d'effet de taille | Pas d'effet de signe ni d'effet de taille | as d'effet de signe ni d'effet de taille | Pas d'effet de signe ni d'effet de taille |
+| **Adjusted Pearson Goodness-of-Fit Test** | Bonne distribution                        | Bonne distribution                        | Bonne distribution                       | Bonne distribution                        |
+
+Dans nos estimations de modèle, nous avons donc trois modèles qui se sont avérés être des candidats potentiels. Ce sont les modèles EGARCH(1,1), IGARCH(1,1) \~ NIG, GJR-GARCH(0,1). Comparons leurs BIC :
+
+$$BIC_{EGARCH(1,1)} = -5.8386$$ $$BIC_{IGARCH(1,1) ~ NIG} = -5.8325$$ $$BIC_{GJR-GARCH(0,1)} =  -5.8329$$
+
+Le BIC le plus bas est celui de l'IGARCH, suivi du GJR-GARCH et de l'EGARCH. Cependant, le modèle EGARCH est celui qui réussit tous les tests que nous avons effectués.
+
+## C) Définitions: {#c-définitions}
+
+<a id="ARCH"></a>
+
+### Modèle ARCH(m):
+
+$$v_t = \sigma_t \varepsilon_t, \quad \sigma_t^2 = \alpha_0 + \alpha_1 v_{t-1}^2 + \ldots + \alpha_m v_{t-m}^2$$ où {$\varepsilon_t$} est une séquence de variables aléatoires indépendantes et identiquement distribuées, ayant une moyenne nulle et un écart-type de 1. De plus, $\alpha_i \geq 0$ pour $i > 0$. $v_t$ est appelé le choc sur les rendements à la date $t$.
+
+-   Avantage : La force du modèle réside dans sa capacité à prendre en compte les clusters de volatilité, où des chocs importants sur les rendements se succèdent. Lorsque des chocs importants sont élevés au carré, cela entraîne une volatilité accrue, conduisant à des chocs significatifs et, par conséquent, à des chocs élevés au carré ($v^2$ élevés $\rightarrow \sigma_t^2$ élevée $\rightarrow v_t$ élevé $\rightarrow v_{t^2}$ élevé).
+
+-   Inconvénients : Cependant, le modèle présente deux inconvénients notables. Tout d'abord, il suppose que les chocs, qu'ils soient positifs ou négatifs, ont les mêmes effets sur la volatilité, car celle-ci dépend du carré des chocs précédents. Cette hypothèse ne capture pas toujours la réalité, car le comportement des actifs financiers peut différer en réaction à des chocs positifs et négatifs. De plus, le modèle ARCH(m) exige un nombre substantiel de paramètres, en particulier lorsque $m$, la taille de la fenêtre, est généralement grande.
+
+<a id="GARCH"></a>
+
+### Modèle GARCH(m,s):
+
+$$v_t = \sigma_t \varepsilon_t, \quad \sigma_t^2 = \alpha_0 + \sum_{i = 1}^m \alpha_i v_{t-i}^2 + \sum_{j = 1}^s \beta_j \sigma_{t-j}^2$$
+
+$$
+\text{où }\varepsilon_t \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0,1), \quad \alpha_0 > 0, \quad \alpha_i \geq 0, \quad \beta_j \geq 0, \quad \left(\sum_{i=1}^{\max(m,s)} (\alpha_i + \beta_i)\right) < 1.
+$$
+
+La contrainte sur $\alpha_i + \beta_i$ garantit que la variance non conditionnelle de $v_t$ est finie et que sa variance conditionnelle varie dans le temps.
+
+En notant $\eta_t = v_t^2 - \sigma_t^2$, alors $\sigma_t^2 = v_t^2 - \eta_t$ et $\sigma_{t-i}^2 = v_{t-i}^2 - \eta_{t-i}$ pour $i = 0, \ldots, s$, et l'équation peut être réécrite comme un ARMA pour la série $v_t^2$:
+
+$$
+v_{t}^2 = \alpha_0 + \sum_{i=1}^{\text{max}(m,s)} (\alpha_i + \beta_i) v_{t-i}^2 + \eta_t -  \sum_{j=1}^{s} \beta_j \eta_{t-j}
+$$
+
+La variance non conditionnelle de $v_t^2$ est donnée par $E(v_t^2) = \frac{\alpha_0}{1 - \left(\sum_{i=1}^{\max(m,s)} (\alpha_i + \beta_i)\right)}$.
+
+#### GARCH(1,1) quelques propriétés:
+
+$$
+v_t = \sigma_t \varepsilon_t, \quad \sigma_t^2 = \alpha_0 + \alpha_1 v_{t-1}^2 + \beta_1 \sigma_{t-1}^2 \quad \text{avec} \quad \alpha_1 \geq 0, \quad \beta_1 \leq 1, \quad (\alpha_1 + \beta_1) < 1.
+$$
+
+Si $v^2$ ou $\sigma^2$ est grande, alors $\sigma^2$ est grande. Ainsi, une forte valeur de $v^2$ tend à être suivie d'une autre forte valeur de $v^2$ avec $\alpha_1 \geq 0$, $\beta_1 \leq 1$, et $(\alpha_1 + \beta_1) < 1$.
+
+Si $1 - 2\alpha_1^2 - (\alpha_1 + \beta_1)^2 > 0$, alors :
+
+$$
+\frac{E(v_t^2)}{[E(v_t^2)]^2} = \frac{3[1 - (\alpha_1 + \beta_1)^2]}{1 - (\alpha_1 + \beta_1)^2 - 2\alpha_1^2} > 3
+$$
+
+Par conséquent, les queues de la distribution d'un modèle GARCH(1,1) sont plus épaisses que celles d'une distribution normale.
+
+<a id="GARCH-M"></a>
+
+### Modèle GARCH-M:
+
+Le modèle GARCH-M (GARCH avec effet de la volatilité sur le rendement) est défini par les équations suivantes :
+
+$$
+r_t = \mu + c\sigma_t^2 + v_t, \quad v_t = \sigma_t \varepsilon_t
+$$
+
+$$
+\sigma_t^2 = \alpha + \alpha v^2 + \beta \sigma^2
+$$
+
+où $\mu$ et $c$ sont des constantes. $c$ est appelé le paramètre de prime de risque. Si $c > 0$, alors le rendement est positivement relié à sa volatilité.
+
+D'autres spécifications de la prime de risque ont été employées :
+
+-   $r_t = \mu + c \sigma_t + v_t$
+-   $r_t = \mu + c \ln(\sigma_t^2) + v_t$
+
+L'existence d'une prime de risque est une autre source d'autocorrélations dans la série des rendements.
+
+<a id="IGARCH"></a>
+
+### Modèle IGARCH:
+
+$$
+\sum _{{i=1}}^{s}~\beta _{{i}}+\sum _{{i=1}}^{m}~\alpha _{{i}}=1
+$$
+
+Il faut faire attention ici. Comme la somme des coefficients (constante exclue) est égale à 1, on ne peut pas calculer la variance non conditionnelle de $v_t$ et donc non plus celle de $r_t$. On doit faire des tests de changements structurels car s'ils sont présents, cela pourrait invalider l'emploi d'un IGARCH. <a id="EGARCH"></a>
+
+<a id="EGARCH"></a>
+
+### Modèle EGARCH(m,s):
+
+[Cliquez pour revenir à la partie concernée](#VaREGARCH)
+
+$$v_t = \sigma_t \epsilon_t$$
+
+$$ \ln \sigma_t^2 = \alpha_0 + \frac{1 + \beta_1L + \ldots + \beta_{s-1}L^{s-1}}{1 - \alpha_1 L - \ldots - \alpha_m L^m} g(\epsilon_{t-1})$$
+
+$$g(\epsilon_t) = \theta \epsilon_t + \gamma [| \epsilon_t | - E(| \epsilon_t |)]$$
+
+Avec $\theta$ et $\gamma$ des constantes réelles. $L$ est l'opérateur retard, c'est-à-dire $L\epsilon_t = \epsilon_{t-1}$ et $L^2\epsilon_t = \epsilon_{t-2}$. $\epsilon_t$ et $| \epsilon_t | - E(| \epsilon_t |)$ sont des séquences i.i.d. avec des distributions continues et sont de moyenne nulle. Donc $E[g(\epsilon_t)] = 0$.
+
+Ce modèle autorise une forme d'asymétrie qui dépend :
+
+-   
+
+    1.  du signe positif ou négatif de l'innovation ($\theta$),
+
+-   
+
+    2.  de l'amplitude de ce choc ($\gamma$).
+
+Par ailleurs, il présente aussi l'avantage de ne nécessiter aucune restriction de non-négativité sur les paramètres afin de garantir la positivité de la variance conditionnelle.
+
+Dans le package `rugarch`, le modèle EGARCH(m,s) est de la forme suivante :
+
+$$v_t = \sigma_t \epsilon_t$$
+
+$$\ln \sigma_t^2 = \alpha_0 + \sum_{i = 1}^s \alpha_i \frac{|\varepsilon_{t-i}| + \gamma_i\varepsilon_{t-i}}{\sigma_{t-i}} + \sum_{j = 1}^m \beta_j \ln(\sigma_{t-j}^2)$$
+
+L'effet de levier est caractérisé par les $\gamma_i$ qui doivent être significatifs et négatifs. Une bonne nouvelle, c'est-à-dire $\epsilon_{t-i} > 0$, a un impact sur la volatilité en log égal à $\alpha_i(1 + \gamma_i) | \epsilon_{t-1} |$, alors qu'une mauvaise nouvelle a un impact égal à $\alpha_i(1 - \gamma_i) | \epsilon_{t-1} |$. <a id="GJR-GARCH"></a>
+
+<a id="GJR-GARCH"></a>
+
+### Modèle GJR-GARCH(m,s):
+
+[Cliquez pour revenir à la partie concernée](#VaRGJR-GARCH)
+
+Le modèle est formulé par l'équation suivante :
+
+$$r_t = \mu + v_t, \quad v_t = \sigma_t \epsilon_t,$$
+
+$$\sigma_t^2 = \alpha_0 + \sum_{i = 1}^m (\alpha_i v^2_{t - i} + \gamma_i I_{t - i < 0}v_{t-i}^2) + \sum_{j = 1}^s \beta_j \sigma^2_{t-j}$$
+
+où les $\epsilon_t$ représentent des bruits blancs et $I_{t-i} = 1$ si $v_{t-i} < 0$ et 0 sinon.
+
+<a id="APARCH"></a>
+
+### Modèle APARCH(m, s):
+
+$$r_t = \mu + v_t$$
+
+$$v_t = \sigma_t \varepsilon_t$$
+
+$$\sigma_t^\delta = \alpha_0 + \sum_{i = 1} ^s \alpha_i (|v_{t-i}| - \gamma_i v_{t-i})^\delta + \sum_{i = 1}^m \beta_i \sigma_{t-i}^\delta$$
+
+La positivité de $\sigma_t$ est assurée par les conditions suivantes :
+
+-   $\alpha_0 > 0$,
+-   $\alpha_i \geq 0$,
+-   $-1 < \gamma_i < 1$ pour $i = 1, \ldots, s$,
+-   $\beta_i \geq 0$ pour $i = 1, \ldots, m$,
+-   $\delta > 0$. En fait, pour avoir une signification, $\delta$ doit être égal à 1 (écart-type conditionnel) ou 2 (variance conditionnelle). La stationnarité du second ordre d'un processus APARCH nécessite :
+
+$$\sum_{i = 1} ^s \alpha_i E[|v_{t-i}| - \gamma_i v_{t-i}]^\delta + \sum_{i = 1}^m \beta_i \sigma_{t-i}^\delta < 1$$
+
+## D) Définitions Test statistiques: {#d-définitions-test-statistiques}
+
+### Test de Ljung-Box:
+
+a.  **Formulation de l'hypothèse nulle (H0)** : L'hypothèse nulle du test de Ljung-Box est que les autocorrélations jusqu'au retard (K) sont nulles. Cela signifie qu'aucune corrélation significative n'est observée entre les observations de la série à ces retards.
+
+b.  **Calcul des statistiques de test** : Le test de Ljung-Box calcule une statistique de test basée sur les autocorrélations jusqu'au retard (K) de la série temporelle. La statistique de test est généralement notée (Q_K) et est calculée comme la somme des carrés des autocorrélations jusqu'au retard (K).
+
+    $$Q_K = T(T+2) \sum_{h=1}^{K} \frac{\hat{\rho}_h^2}{T-h}$$
+
+    Où :
+
+    -   $T$ est la taille de l'échantillon.
+    -   $hat{\rho}_h$ est l'autocorrélation empirique au retard $h$.
+    -   $K$ est le retard maximal testé.
+
+c.  **Calcul de la statistique de test ajustée** : La statistique de test (Q_K) est ajustée en fonction du nombre de degrés de liberté. Les degrés de liberté sont généralement égaux à (K). La statistique de test ajustée est généralement notée ($Q_K^*$) et est donnée par :
+
+    $$Q_K^* = Q_K - T$$
+
+d.  **Calcul de la p-valeur** : La statistique de test ($Q_K^*$) suit approximativement une distribution du chi-carré sous l'hypothèse nulle. On peut donc calculer la p-valeur associée à ($Q_K^*$) en utilisant cette distribution. Une faible p-valeur indique un rejet de l'hypothèse nulle, suggérant ainsi que les autocorrélations ne sont pas nulles jusqu'au retard ($K$).
+
+e.  **Interprétation** : Si la p-valeur est inférieure à un seuil de signification (par exemple, 0.05), on peut rejeter l'hypothèse nulle et conclure que les autocorrélations ne sont pas nulles jusqu'au retard (K), ce qui suggère une dépendance temporelle significative dans la série.
+
+### Test ARCH d'Engle:
+
+Le test ARCH (AutoRegressive Conditional Heteroskedasticity) d'Engle, également connu sous le nom de test d'Engle pour l'hétéroscédasticité conditionnelle, est utilisé pour détecter la présence d'hétéroscédasticité conditionnelle dans une série temporelle financière ou économique. L'hétéroscédasticité conditionnelle signifie que la volatilité des données n'est pas constante au fil du temps, mais varie de manière systématique en réponse aux conditions du marché ou à d'autres facteurs.
+
+Imaginons que nous ayons $\epsilon_t$ en tant que résidu du modèle ARMA(p,q) représentant l'équation de la moyenne conditionnelle de $r_t$, tandis que $e$ correspond aux résidus liés à son estimation. Dans ce contexte, le modèle ARCH(m), qui décrit la variation de la volatilité de $r_t$, est formulé comme suit :
+
+$$\sigma_t^2 = \alpha_0 + \alpha_1\epsilon_{t-1}^2 + \alpha_2\epsilon_{t-2}^2 + ... + \alpha_m\epsilon_{t-m}^2$$
+
+L'hypothèse nulle, notée $H_0$, stipule que $\alpha_1 = \alpha_2 = \ldots = \alpha_m = 0$, ce qui implique que la volatilité est homoscédastique conditionnellement, c'est-à-dire qu'elle ne varie pas systématiquement en réponse aux changements dans les résidus. En revanche, l'hypothèse alternative ($Ha$) suggère qu'au moins l'un des coefficients $\alpha_i$ est différent de zéro, avec $i$ différent de zéro. Cela indiquerait la présence d'hétéroscédasticité conditionnelle, c'est-à-dire une variation systématique de la volatilité en réponse aux résidus.
+
+Pour calculer la statistique de test, on estime les coefficients à l'aide de la méthode des moindres carrés ordinaires (MCO) selon l'équation précente. Ensuite, on multiplie le coefficient de détermination ($R^2$) de cette régression par le nombre d'observations ($N$) pour obtenir la statistique de test $LM = N \times R^2$. Sous l'hypothèse nulle ($H_0$), cette statistique $LM$ suit une distribution chi-carrée avec $m$ degrés de liberté ($LM \sim \chi^2(m)$).
+
+L'équation précédente illustre que les erreurs $e^2_t$ sont modélisées comme une combinaison linéaire des termes $e^2_{t-1}$, $e^2_{t-2}$, ..., $e^2_{t-p}$, avec des coefficients $c_1$, $c_2$, $\ldots$, $c_p$. En utilisant la fonction `ArchTest(,)` en R pour la variable `rte`, si l'hypothèse nulle d'homoscédasticité conditionnelle est rejetée, cela indique la présence d'hétéroscédasticité conditionnelle dans les données.
+
+Cette procédure permet de déterminer si la volatilité conditionnelle est un aspect significatif de la série temporelle, ce qui peut avoir des implications importantes.
+
+### Test de Nyblom:
+
+-   $H_0$ : Stabilités des coefficients dans le temps
+
+-   $H_a$ : Au moins un des coefficients n'est pas stable dans le temps
+
+### Sign Bias Test (Engle et Ng 1993):
+
+Le *Sign Bias Test* repose sur l'équation suivante :
+
+$$\tilde{v}_t^2 = c_0 + c_1 I_{\tilde{v}_{t-1} < 0} + c_2 I_{\tilde{v}_{t-1} < 0} \tilde{v}_{t-1} + c_3 I_{\tilde{v}_{t-1} \geq 0} \tilde{v}_{t-1} + u_t$$
+
+où $I$ est une fonction indicatrice évaluée à 1 si la condition en indice est satisfaite. Ce test comporte quatre hypothèses nulles : la nullité de chaque $c_i$ pour $i=1,2,3$ et la nullité conjointe des trois (effet conjoint).
+
+-   Si $c_1$ est significativement différent de 0, cela suggère un effet de signe (un choc $< 0$ et un choc $> 0$ ont un impact différencié sur la volatilité). Dans R, ce test est appelé le Sign Bias et $H_0$ est l'absence d'effet de signe.
+
+-   Si $c_2$ est significativement différent de 0, il existe un effet de taille d'un choc négatif, indiquant que les chocs $< 0$ de petite et grande amplitude n'ont pas le même impact sur la volatilité. Dans R, ce test est appelé le Negative Sign Bias et $H_0$ est l'absence d'effet de taille d'un choc $< 0$.
+
+-   Si $c_3$ est significativement différent de 0, il existe un effet de taille d'un choc positif, indiquant que les chocs $> 0$ de petite et grande amplitude n'ont pas le même impact sur la volatilité. Dans R, ce test est appelé le Positive Sign Bias et $H_0$ est l'absence d'effet de taille d'un choc $> 0$.
+
+-   Si les trois coefficients sont significatifs, il existe à la fois un effet de signe et un effet de taille pour les deux chocs. Dans R, ce test est appelé l'Effet Conjugué et $H_0$ est l'absence d'effet de signe et d'effet de taille.
+
+On commence par examiner la p-value de la statistique conjointe (`joint effect`). Sa p-value ($9.219 \times 10^{-05} < 0.05$) nous conduit à rejeter l'hypothèse nulle, indiquant qu'il y a soit l'un des deux effets, soit les deux. En observant la p-value de la statistique du signe du biais ($0.0176 < 0.05$), nous rejetons $H_0$, suggérant qu'un choc positif a un impact différent sur la volatilité des rendements par rapport à un choc négatif. En ce qui concerne les p-values des statistiques liées aux effets de taille, il n'y a pas d'effet de taille, que ce soit pour un choc positif ou négatif, au seuil de risque de 5%.
+
+### Adjusted Pearson Goodness-of-Fit Test:
+
+Enfin, le test d'ajustement de Pearson à la bonté de l'ajustement permet de vérifier l'adéquation entre la distribution supposée dans la spécification (`distribution.model`) et la distribution empirique des résidus standardisés. **L'hypothèse nulle** stipule que les deux distributions sont conformes.
+
+<a id="kupiec"></a>
+
+### Test de Kupiec:
+
+-   $H_0$ : Taux de violation théorique $5%$ = Taux de violation empirique
+
+-   $H_a$ : Taux de violation théorique $5%$ $\neq$ Taux de violation empirique
+
+### Test de Christoffersen:
+
+Ce test ne tient pas compte des potentielles violations de l'hypothèse d'indépendance des fonctions de Hit. En revanche, le test de couverture conditionnelle de Christoffersen et al. (2001) remédie à ce problème en évaluant simultanément la fréquence et l'indépendance des fonctions de Hit par rapport aux autres variables incluses dans l'ensemble d'information.
+
+-   $H_0$ : Taux de violation théorique $5%$ = Taux de violation empirique et l'indépendance des violations
+
+-   $H_a$ : Taux de violation théorique $5%$ $\neq$ Taux de violation empirique et l'indépendance des violations
+
+## E) D'autres VaR Conditionnelle : {#e-dautres-var-conditionnelle}
+
+Notons que cette partie ne doit pas être utilisé pour le choix de notre modèle d'évaluation de la VaR finale. Car se fier aux résultats du backtesting pour choisir le modèle d'évaluation de la VaR finale présente des risques importants. Cela peut conduire à un surajustement aux données passées, ne pas prendre en compte l'évolution des marchés, et dépendre d'hypothèses qui pourraient ne plus être valides dans des conditions de marché différentes. Pour garantir la robustesse du modèle, il est essentiel d'adopter une approche holistique, intégrant la validation hors échantillon de test de notre modèle.
+
+<a id="VaRIGARCH"></a>
+
+### a) IGARCH(1,1) \~ nig:
+
+-   Le modèle IGARCH est défini en [annexe ici](#IGARCH).
+
+-   Le modèle suivant est estimé [ici](#IGARCH(1,1)).
+
+```{r, echo = FALSE}
+#modèle choisit en annexe
+spec_igarch2 <- ugarchspec(variance.model=list(model="iGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="nig",
+           fixed.pars = list(skew = 0))
+
+# Calcul le nombre de coeur
+no_cores <- detectCores() - 1
+# Initilisation du nombre de coeurs
+cl <- makeCluster(no_cores)
+# Seuil alpha
+alpha = 0.95
+
+roll=ugarchroll(spec_igarch2, data=rt,n.ahead=1,forecast.length=length(rtt),
+                refit.every=1,refit.window="moving",solver = "hybrid",cluster=cl,fit.control = list(),calculate.VaR=TRUE,
+VaR.alpha=(1-alpha),keep.coef = TRUE)
+stopCluster(cl)
+```
+
+```{r, echo = FALSE, warning = FALSE}
+#| column: screen-inset-shaded
+#| layout-nrow: 1
+valueatrisk<-zoo(roll@forecast$VaR[,1])
+reelles<-zoo(roll@forecast$VaR[,2])
+index<-rownames(roll@forecast$VaR)
+plot(dates[(NE+1):N],reelles,type='l',xlab="Dates  \n IGARCH ~ nig",ylab="Rendements et VaR",
+     col = col_theme, lwd = 0.5, main = graph_name("VaR avec la méthode de fenêtre glissante"))
+lines(dates[(NE+1):N],valueatrisk,type='l',col=colors_theme[2],lwd = 1.5)
+legend("topright",inset=.05,c("rt","VaR"),col=c(col_theme,colors_theme[2]),lty=c(1,1))
+
+fit = ugarchfit(spec_igarch2, data = rte)
+spec2 = spec_igarch2
+setfixed(spec2)<-as.list(coef(fit))
+filt = ugarchfilter(spec=spec2, data=rtt)
+# location(alpha)+scale(beta) invariance allows to use [mu + sigma*q(p,0,1,skew,shape)]
+VaR=fitted(filt)+sigma(filt)*qdist("nig",p=(1 - alpha),mu=0,sigma=1,skew = coef(filt)["skew"],shape=coef(filt)["shape"])
+
+plot(dates[(NE+1):N],reelles,type='l',xlab="Dates",ylab="Rendements et VaR",
+     col = col_theme, lwd = 0.5, main = graph_name("VaR avec filtre ~ IGARCH(1,1) ~ nig "))
+lines(dates[(NE+1):N],VaR,type='l',col=colors_theme[2],lwd = 1.5)
+legend("topright",inset=.05,c("rt","VaR"),col=c(col_theme,colors_theme[2]),lty=c(1,1))
+```
+
+```{r, echo = FALSE,message=F, include = F}
+report(roll,type="VaR",VaR.alpha=(1-alpha),conf.level=alpha)
+```
+
+|                        | Violation Estimée | Violation théorique | PV Kupiec | PV Christoffersen |
+|---------------|---------------|---------------|---------------|---------------|
+| VaR IGARCH(1,1) \~ nig | 83                | 73.4                | 0.257     | 0.175             |
+
+: `r table_name('Violations VaR IGARCH(1,1)~nig')`
+
+La VaR de notre modèle IGARCH présente un taux de violation de 5,7%. Nous avons donc ici sous-évalué la VaR de 0,7%. La p-value est supérieure à 0,05 dans le cadre du test de Kupiec. Ainsi, nous acceptons l'hypothèse nulle, indiquant que la VaR est bien estimée. De même, la p-value est supérieure à 0,05 dans le cadre du test de Christoffersen. Nous acceptons donc l'hypothèse nulle, confirmant que la VaR est bien estimée et que les violations sont indépendantes.
+
+<a id="VaRGJR-GARCH"></a>
+
+### b) GJR-GARCH(0,1) \~ std :
+
+-   Le modèle IGARCH est défini en [annexe ici](#GJR-GARCH).
+
+-   Le modèle suivant est estimé [ici](#GJR-GARCH(1,1)).
+
+```{r, echo = FALSE}
+#modèle choisit en annexe
+spec_gjrgarch <- ugarchspec(variance.model=list(model="gjrGARCH", garchOrder=c(1,1)),
+           mean.model=list(armaOrder=c(1,1)),distribution.model="std",
+           fixed.pars = list(alpha1 = 0))
+
+# Calcul le nombre de coeur
+no_cores <- detectCores() - 1
+# Initilisation du nombre de coeurs
+cl <- makeCluster(no_cores)
+# Seuil alpha
+alpha = 0.95
+
+roll=ugarchroll(spec_gjrgarch, data=rt,n.ahead=1,forecast.length=length(rtt),
+                refit.every=1,refit.window="moving",solver = "hybrid",cluster=cl,fit.control = list(),calculate.VaR=TRUE,
+VaR.alpha=(1-alpha),keep.coef = TRUE)
+stopCluster(cl)
+```
+
+```{r, echo = FALSE}
+valueatrisk<-zoo(roll@forecast$VaR[,1])
+reelles<-zoo(roll@forecast$VaR[,2])
+index<-rownames(roll@forecast$VaR)
+plot(dates[(NE+1):N],reelles,type='l',xlab="Dates  \n GJR_GARCH ~ std",ylab="Rendements et VaR",
+     col = col_theme, lwd = 0.5, main = graph_name("VaR avec la méthode de fenêtre glissante"))
+lines(dates[(NE+1):N],valueatrisk,type='l',col=colors_theme[2],lwd = 1.5)
+legend("topright",inset=.05,c("rt","VaR"),col=c(col_theme,colors_theme[2]),lty=c(1,1))
+
+```
+
+```{r, echo = FALSE, message=F, include = F}
+report(roll,type="VaR",VaR.alpha=(1-alpha),conf.level=alpha)
+```
+
+|                           | Violation Estimée | Violation théorique | PV Kupiec | PV Christoffersen |
+|---------------|---------------|---------------|---------------|---------------|
+| VaR GJR_GARCH(0,1) \~ std | 91                | 73.4                | 0.041     | 0.047             |
+
+La VaR de notre modèle GJR_GARCH présente un taux de violation de 6,2%. Nous avons donc sous-évalué la VaR de 1,2%. La p-value est inférieure à 0,05 dans le cadre du test de Kupiec. Ainsi, nous rejetons H0, indiquant que la VaR n'est pas bien estimée. De même, la p-value est inférieure à 0,05 dans le cadre du test de Christoffersen, conduisant également au rejet de H0. La VaR n'est donc une fois de plus pas bien estimée selon ce test.
+
+# Bibliographie :
+
+-   Cours de Madame Marie Lebreton
+
+-   https://www.unitedhealthgroup.com
+
+-   https://en.wikipedia.org/wiki/UnitedHealth_Group
+
+-   Time Series Analysis and Its Applications With R Examples (Springer Texts in Statistics) - Robert H. Shumway, David S. Stoffer
